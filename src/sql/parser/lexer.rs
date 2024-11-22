@@ -1,4 +1,4 @@
-use std::{iter::Peekable, str::Chars};
+use std::{fmt::Display, iter::Peekable, str::Chars};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +55,33 @@ impl Keyword {
             _ => return None,
         })
     }
+
+    pub fn to_str(&self) -> &str {
+        match self {
+            Keyword::Create => "CREATE",
+            Keyword::Table => "TABLE",
+            Keyword::Int => "INT",
+            Keyword::Integer => "INTEGER",
+            Keyword::Boolean => "BOOLEAN",
+            Keyword::String => "STRING",
+            Keyword::Text => "TEXT",
+            Keyword::Varchar => "VARCHAR",
+            Keyword::Float => "FLOAT",
+            Keyword::Double => "DOUBLE",
+            Keyword::Select => "SELECT",
+            Keyword::From => "FROM",
+            Keyword::Insert => "INSERT",
+            Keyword::Into => "INTO",
+            Keyword::Values => "VALUES",
+            Keyword::True => "TRUE",
+            Keyword::False => "FALSE",
+            Keyword::Default => "DEFAULT",
+            Keyword::Not => "NOT",
+            Keyword::Null => "NULL",
+            Keyword::Primary => "PRIMARY",
+            Keyword::Key => "KEY",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,6 +99,26 @@ pub enum Token {
     Minus,              //  -
     Slash,              //  /
 }
+
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Token::Keyword(keyword) => keyword.to_str(),
+            Token::Ident(ident) => ident,
+            Token::String(string) => string,
+            Token::Number(number) => number,
+            Token::OpenParen => "(",
+            Token::CloseParen => ")",
+            Token::Comma => ",",
+            Token::Semicolon => ";",
+            Token::Asterisk => "*",
+            Token::Plus => "+",
+            Token::Minus => "-",
+            Token::Slash => "/",
+        })
+    }
+}
+
 pub struct Lexer<'a> {
     iter: Peekable<Chars<'a>>
 }

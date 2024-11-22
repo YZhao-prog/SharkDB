@@ -1,4 +1,4 @@
-use std::{collections::btree_map::Keys, fmt::format, iter::Peekable};
+use std::iter::Peekable;
 
 use lexer::{Keyword, Lexer, Token};
 
@@ -28,7 +28,7 @@ impl<'a> Parser<'a> {
         // check first token
         match self.peek()? {
             Some(Token::Keyword(Keyword::Create)) => self.parse_ddl(),
-            Some(t) => Err(Error::Parse(format!("[Parser] Unexpected token"))),
+            Some(t) => Err(Error::Parse(format!("[Parser] Unexpected token {}", t))),
             None => Err(Error::Parse(format!("[Parser] Unexpected end of input"))),
         }
     }
@@ -38,11 +38,16 @@ impl<'a> Parser<'a> {
         // find next of create/drop
         match self.next()? {
             Token::Keyword(Keyword::Create) => match self.next()? {
-                Token::Keyword(Keyword::Table) => todo!(),
-                token => Err(Error::Parse(format!("[Parser] Unexpected end of input"))),
+                Token::Keyword(Keyword::Table) => self.parse_ddl_create_table(),
+                token => Err(Error::Parse(format!("[Parser] Unexpected token {}", token))),
             },
-            token => Err(Error::Parse(format!("[Parser] Unexpected end of input"))),
+            token => Err(Error::Parse(format!("[Parser] Unexpected token {}", token))),
         }
+    }
+
+    fn parse_ddl_create_table(&mut self) -> Result<ast::Statement> {
+        // check table's name, must be indent type
+        todo!()
     }
 
     fn peek(&mut self) -> Result<Option<Token>> {
@@ -52,5 +57,12 @@ impl<'a> Parser<'a> {
 
     fn next(&mut self) -> Result<Token> {
         self.lexer.next().unwrap_or_else(|| Err(Error::Parse(format!("[Parser] Unexpected end of input"))))
+    }
+
+    fn next_indent(&mut self) -> Result<String> {
+        match self.next()? {
+            Token::Ident(indent) => Ok(indent),
+            token => Err(Error::Parse(format!("[Parser] Expect indent, got token {}", token))),
+        }
     }
 }
