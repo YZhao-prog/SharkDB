@@ -36,6 +36,7 @@ impl Keyword {
             "INT" => Keyword::Int,
             "INTEGER" => Keyword::Integer,
             "BOOLEAN" => Keyword::Boolean,
+            "BOOL" => Keyword::Bool,
             "STRING" => Keyword::String,
             "TEXT" => Keyword::Text,
             "VARCHAR" => Keyword::Varchar,
@@ -83,6 +84,12 @@ impl Keyword {
             Keyword::Key => "KEY",
             Keyword::Bool => "Bool",
         }
+    }
+}
+
+impl Display for Keyword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.to_str())
     }
 }
 

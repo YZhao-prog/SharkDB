@@ -24,6 +24,12 @@ impl<'a> Parser<'a> {
     // parse and get ast tree
     pub fn parse(&mut self) -> Result<ast::Statement> {
         let stmt = self.parse_statement()?;
+        // expect find a ";" after sql
+        self.next_expect(Token::Semicolon)?;
+        // If there is something else after ";", then this is an illegal sql
+        if let Some(token) = self.peek()? {
+            return Err(Error::Parse(format!("[Parser] Unexpected token {}", token)));
+        }
         Ok(stmt)
     }
 
@@ -59,7 +65,16 @@ impl<'a> Parser<'a> {
         self.next_expect(Token::OpenParen)?;
         // check column after "("
         let mut columns = Vec::new();
-        todo!()
+        loop {
+            columns.push(self.parse_ddl_column()?);
+            // if no "," afterwards, finish parse column
+            if self.next_if_token(Token::Comma).is_none() {
+                break;
+            }
+        }
+        // check ")"
+        self.next_expect(Token::CloseParen)?;
+        Ok(ast::Statement::CreateTable { name: table_name, columns: columns })
     }
 
     fn parse_ddl_column(&mut self) -> Result<ast::Column> {
@@ -84,11 +99,30 @@ impl<'a> Parser<'a> {
                     self.next_expect(Token::Keyword(Keyword::Null))?;
                     column.nullable = Some(false);
                 },
-                Keyword::Default => todo!(),
+                Keyword::Default => column.default = Some(self.parse_expression()?),
                 k => return Err(Error::Parse(format!("[Parser] Unexpected keyword {}", k))),
             }
         }
         Ok(column)
+    }
+
+    fn parse_expression(&mut self) -> Result<ast::Expression> {
+        Ok(match self.next()? {
+            Token::Number(n) => {
+                if n.chars().all(|c| c.is_ascii_digit()) {
+                    // Integer
+                    ast::Consts::Integer(n.parse()?).into()
+                } else {
+                    // Float
+                    ast::Consts::Float(n.parse()?).into()
+                }
+            },
+            Token::String(s) => ast::Consts::String(s).into(),
+            Token::Keyword(Keyword::True) => ast::Consts::Boolean(true).into(),
+            Token::Keyword(Keyword::False) => ast::Consts::Boolean(false).into(),
+            Token::Keyword(Keyword::Null) => ast::Consts::Null.into(),
+            t => return Err(Error::Parse(format!("[Parser] Unexpected token {}", t)))
+        })
     }
 
     fn peek(&mut self) -> Result<Option<Token>> {
@@ -118,12 +152,16 @@ impl<'a> Parser<'a> {
     }
 
     fn next_if<F: Fn(&Token) -> bool>(&mut self, predicate: F) -> Option<Token> {
-        // if none, return in advance; if Some(Token), continue
+        // if none, return none in advance; if Some(Token), continue
         self.peek().unwrap_or(None).filter(|t| predicate(t))?;
         self.next().ok() // Go next; Result -> Option
     }
     // if this is a keyword, go next and return
     fn next_if_keyword(&mut self) -> Option<Token> {
         self.next_if(|t| matches!(t, Token::Keyword(_)))
+    }
+
+    fn next_if_token(&mut self, token: Token) -> Option<Token> {
+        self.next_if(|t| t == &token)
     }
 }

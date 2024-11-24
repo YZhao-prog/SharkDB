@@ -29,6 +29,7 @@ pub enum Expression {
     Consts(Consts),
 }
 
+// Use const.into() converse Consts to Expression
 impl From<Consts> for Expression {
     fn from(value: Consts) -> Self {
         Self::Consts(value)
