@@ -37,9 +37,72 @@ impl<'a> Parser<'a> {
         // check first token
         match self.peek()? {
             Some(Token::Keyword(Keyword::Create)) => self.parse_ddl(),
+            Some(Token::Keyword(Keyword::Select)) => self.parse_select(),
+            Some(Token::Keyword(Keyword::Insert)) => self.parse_insert(),
             Some(t) => Err(Error::Parse(format!("[Parser] Unexpected token {}", t))),
             None => Err(Error::Parse(format!("[Parser] Unexpected end of input"))),
         }
+    }
+
+
+    // INSERT INTO employees (id, name, salary)
+    // VALUES (1, 'Alice', 50000);
+    //          OR
+    // INSERT INTO employees
+    // VALUES (1, 'Alice', 50000);
+    fn parse_insert(&mut self) -> Result<ast::Statement> {
+        // check 'insert into'
+        self.next_expect(Token::Keyword(Keyword::Insert))?;
+        self.next_expect(Token::Keyword(Keyword::Into))?;
+        // check table name
+        let table_name = self.next_indent()?;
+        // check "(" so we know if we have column name here, and get column info
+        let columns = if self.next_if_token(Token::OpenParen).is_some() {
+            let mut cols = Vec::new();
+            loop {
+                cols.push(self.next_indent()?);
+                match self.next()? {
+                    Token::CloseParen => break,
+                    Token::Comma => {},
+                    token =>  return Err(Error::Parse(format!("[Parser] Unexpected token {}", token))),
+                }
+            }
+            Some(cols)
+        } else {
+            None
+        };
+        // parse value
+        self.next_expect(Token::Keyword(Keyword::Values))?;
+        // insert into tbl(a, b, c) values (1, 2, 3), (4, 5, 6);
+        let mut values = Vec::new();
+        loop {
+            self.next_expect(Token::OpenParen)?;
+            let mut exprs = Vec::new();
+            loop {
+                exprs.push(self.parse_expression()?);
+                match self.next()? {
+                    Token::CloseParen => break,
+                    Token::Comma => {},
+                    token =>  return Err(Error::Parse(format!("[Parser] Unexpected token {}", token))),
+                }
+            }
+            values.push(exprs);
+            // if no "," afterwards, finish and break
+            if self.next_if_token(Token::Comma).is_none() {
+                break;
+            }
+        }
+        Ok(ast::Statement::Insert { table_name, columns, values})
+    }
+
+    fn parse_select(&mut self) -> Result<ast::Statement> {
+        // check 'select * from'
+        self.next_expect(Token::Keyword(Keyword::Select))?;
+        self.next_expect(Token::Asterisk)?;
+        self.next_expect(Token::Keyword(Keyword::From))?;
+        // check table name
+        let table_name = self.next_indent()?;
+        Ok(ast::Statement::Select { table_name })
     }
 
     // parse ddl type，create xxx, drop xxx
@@ -163,5 +226,114 @@ impl<'a> Parser<'a> {
 
     fn next_if_token(&mut self, token: Token) -> Option<Token> {
         self.next_if(|t| t == &token)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use crate::{error::Result, sql::{parser::ast, types::DataType}};
+
+    use super::Parser;
+
+    #[test]
+    fn test_parse_create_table() -> Result<()> {
+        let sql = "
+            Create table tbl1 (
+                a int default 100,
+                b float not null,
+                c varchar null,
+                d bool default true
+            );
+        ";
+        let stmt = Parser::new(sql).parse()?;
+        let expected_stmt = ast::Statement::CreateTable {
+            name: "tbl1".to_string(),
+            columns: vec![
+                ast::Column {
+                    name: "a".to_string(),
+                    datatype: DataType::Integer,
+                    nullable: None,
+                    default: Some(ast::Consts::Integer(100).into()),
+                },
+                ast::Column {
+                    name: "b".to_string(),
+                    datatype: DataType::Float,
+                    nullable: Some(false),
+                    default: None,
+                },
+                ast::Column {
+                    name: "c".to_string(),
+                    datatype: DataType::String,
+                    nullable: Some(true),
+                    default: None,
+                },
+                ast::Column {
+                    name: "d".to_string(),
+                    datatype: DataType::Boolean,
+                    nullable: None,
+                    default: Some(ast::Consts::Boolean(true).into()),
+                },
+            ],
+        };
+        assert_eq!(stmt, expected_stmt);
+        Ok(())
+    }
+
+    #[test]
+    fn test_parser_insert() -> Result<()> {
+        let sql1 = "insert into tbl1 values (1, 2, 3, 'a', true);";
+        let stmt1 = Parser::new(sql1).parse()?;
+        assert_eq!(
+            stmt1,
+            ast::Statement::Insert {
+                table_name: "tbl1".to_string(),
+                columns: None,
+                values: vec![vec![
+                    ast::Consts::Integer(1).into(),
+                    ast::Consts::Integer(2).into(),
+                    ast::Consts::Integer(3).into(),
+                    ast::Consts::String("a".to_string()).into(),
+                    ast::Consts::Boolean(true).into(),
+                ]],
+            }
+        );
+
+        let sql2 = "insert into tbl2 (c1, c2, c3) values (3, 'a', true),(4, 'b', false);";
+        let stmt2 = Parser::new(sql2).parse()?;
+        assert_eq!(
+            stmt2,
+            ast::Statement::Insert {
+                table_name: "tbl2".to_string(),
+                columns: Some(vec!["c1".to_string(), "c2".to_string(), "c3".to_string()]),
+                values: vec![
+                    vec![
+                        ast::Consts::Integer(3).into(),
+                        ast::Consts::String("a".to_string()).into(),
+                        ast::Consts::Boolean(true).into(),
+                    ],
+                    vec![
+                        ast::Consts::Integer(4).into(),
+                        ast::Consts::String("b".to_string()).into(),
+                        ast::Consts::Boolean(false).into(),
+                    ],
+                ],
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parser_select() -> Result<()> {
+        let sql = "select * from tbl1;";
+        let stmt = Parser::new(sql).parse()?;
+        assert_eq!(
+            stmt,
+            ast::Statement::Select {
+                table_name: "tbl1".to_string()
+            }
+        );
+        Ok(())
     }
 }
