@@ -1,8 +1,11 @@
 use std::iter::Peekable;
 
+use ast::Column;
 use lexer::{Keyword, Lexer, Token};
 
 use crate::error::{Error, Result};
+
+use super::types::DataType;
 
 mod lexer;
 
@@ -45,9 +48,47 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // CREATE TABLE table_name (
+    //     id INT NOT NULL DEFAULT 0
+    //     ...
+    // );
     fn parse_ddl_create_table(&mut self) -> Result<ast::Statement> {
         // check table's name, must be indent type
+        let table_name = self.next_indent()?;
+        // check "(" afther table name
+        self.next_expect(Token::OpenParen)?;
+        // check column after "("
+        let mut columns = Vec::new();
         todo!()
+    }
+
+    fn parse_ddl_column(&mut self) -> Result<ast::Column> {
+        let mut column = Column {
+            name: self.next_indent()?,
+            datatype: match self.next()? {
+                Token::Keyword(Keyword::Int) | Token::Keyword(Keyword::Integer) => DataType::Integer,
+                Token::Keyword(Keyword::Boolean) | Token::Keyword(Keyword::Bool) => DataType::Boolean,
+                Token::Keyword(Keyword::Float) | Token::Keyword(Keyword::Double) => DataType::Float,
+                Token::Keyword(Keyword::String) | Token::Keyword(Keyword::Text) 
+                | Token::Keyword(Keyword::Varchar) => DataType::String,
+                token => return Err(Error::Parse(format!("[Parser] Unexpected token {}", token))),
+            },
+            nullable: None,
+            default: None,
+        };
+        // check if this column could have default value, and if it is nullable
+        while let Some(Token::Keyword(keyword)) = self.next_if_keyword() {
+            match keyword { 
+                Keyword::Null => column.nullable = Some(true),
+                Keyword::Not => {
+                    self.next_expect(Token::Keyword(Keyword::Null))?;
+                    column.nullable = Some(false);
+                },
+                Keyword::Default => todo!(),
+                k => return Err(Error::Parse(format!("[Parser] Unexpected keyword {}", k))),
+            }
+        }
+        Ok(column)
     }
 
     fn peek(&mut self) -> Result<Option<Token>> {
@@ -56,6 +97,8 @@ impl<'a> Parser<'a> {
     }
 
     fn next(&mut self) -> Result<Token> {
+        // Some(Token) -> Token -> Ok(Token)
+        // None -> Err
         self.lexer.next().unwrap_or_else(|| Err(Error::Parse(format!("[Parser] Unexpected end of input"))))
     }
 
@@ -64,5 +107,23 @@ impl<'a> Parser<'a> {
             Token::Ident(indent) => Ok(indent),
             token => Err(Error::Parse(format!("[Parser] Expect indent, got token {}", token))),
         }
+    }
+
+    fn next_expect(&mut self, expect: Token) -> Result<()> {
+        let token = self.next()?;
+        if token != expect {
+            return Err(Error::Parse(format!("[Parser] Expect token {}, got token {}",expect ,token)));
+        }
+        return Ok(());
+    }
+
+    fn next_if<F: Fn(&Token) -> bool>(&mut self, predicate: F) -> Option<Token> {
+        // if none, return in advance; if Some(Token), continue
+        self.peek().unwrap_or(None).filter(|t| predicate(t))?;
+        self.next().ok() // Go next; Result -> Option
+    }
+    // if this is a keyword, go next and return
+    fn next_if_keyword(&mut self) -> Option<Token> {
+        self.next_if(|t| matches!(t, Token::Keyword(_)))
     }
 }

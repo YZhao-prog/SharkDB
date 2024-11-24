@@ -8,6 +8,7 @@ pub enum Keyword {
     Int,
     Integer,
     Boolean,
+    Bool,
     String,
     Text,
     Varchar,
@@ -80,6 +81,7 @@ impl Keyword {
             Keyword::Null => "NULL",
             Keyword::Primary => "PRIMARY",
             Keyword::Key => "KEY",
+            Keyword::Bool => "Bool",
         }
     }
 }
