@@ -16,7 +16,7 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn new(input: &'a str) -> Self {
+    pub fn new(input: &'a str) -> Self {
         Parser {
             lexer: Lexer::new(input).peekable(),
         }
