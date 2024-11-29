@@ -28,3 +28,5 @@ impl Value {
         }
     }
 }
+
+pub type Row = Vec<Value>;
