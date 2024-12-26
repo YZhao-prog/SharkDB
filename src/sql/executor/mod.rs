@@ -10,7 +10,7 @@ mod schema;
 mod mutation;
 mod query;
 pub trait Executor<T: Transaction> {
-    fn execute(&self, txn: &mut T) -> Result<ResultSet> {
+    fn execute(self: Box<Self>, txn: &mut T) -> Result<ResultSet> {
         todo!()
     }
 }
