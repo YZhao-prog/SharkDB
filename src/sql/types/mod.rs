@@ -10,7 +10,7 @@ pub enum DataType {
     String,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Integer(i64),
     Float(f64),

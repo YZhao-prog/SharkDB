@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 use super::{executor::ResultSet, parser::Parser, plan::Plan, schema::Table, types::Row};
 
@@ -25,6 +25,14 @@ pub trait Transaction {
     fn scan_table(&self, table_name: String) -> Result<Vec<Row>>;
     fn create_table(&mut self, table: Table) -> Result<()>;
     fn get_table(&self, table_name: String) -> Result<Option<Table>>;
+    // must get table info, otherwise return error (such as table not exist)
+    fn must_get_table(&self, table_name: String) -> Result<Table> {
+        self.get_table(table_name.clone())?
+            .ok_or(Error::Internal(format!(
+                "Table {} does not exist",
+                table_name
+            )))
+    }
 }
 
 pub struct Session<E: Engine> {
