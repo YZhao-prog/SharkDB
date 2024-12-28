@@ -21,7 +21,7 @@ pub trait Engine: Clone {
 pub trait Transaction {
     fn commit(&self) -> Result<()>;
     fn rollback(&self) -> Result<()>;
-    fn create_row(&mut self, table: String, row: Row) -> Result<()>;
+    fn create_row(&mut self, table_name: String, row: Row) -> Result<()>;
     fn scan_table(&self, table_name: String) -> Result<Vec<Row>>;
     fn create_table(&mut self, table: Table) -> Result<()>;
     fn get_table(&self, table_name: String) -> Result<Option<Table>>;
@@ -48,9 +48,9 @@ impl<E: Engine> Session<E> {
                 let mut txn = self.engine.begin()?;
                 // build plan, execute sql
                 match Plan::build(stmt).execute(&mut txn) {
-                    Ok(Result) => {
+                    Ok(result) => {
                         txn.commit()?;
-                        Ok(Result)
+                        Ok(result)
                     },
                     Err(err) => {
                         txn.rollback()?;

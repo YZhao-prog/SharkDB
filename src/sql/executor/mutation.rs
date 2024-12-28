@@ -1,6 +1,5 @@
-use std::{collections::HashMap, default};
+use std::collections::HashMap;
 
-use serde::de::value;
 
 use crate::{error::{Error, Result}, sql::{engine::Transaction, parser::ast::Expression, schema::Table, types::{Row, Value}}};
 

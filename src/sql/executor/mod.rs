@@ -10,9 +10,7 @@ mod schema;
 mod mutation;
 mod query;
 pub trait Executor<T: Transaction> {
-    fn execute(self: Box<Self>, txn: &mut T) -> Result<ResultSet> {
-        todo!()
-    }
+    fn execute(self: Box<Self>, txn: &mut T) -> Result<ResultSet>;
 }
 
 // 1.	抽象化实现:
@@ -32,6 +30,7 @@ impl<T: Transaction> dyn Executor<T> {
     }
 }
 
+#[derive(Debug)]
 pub enum ResultSet {
     CreateTable {
         table_name: String,
