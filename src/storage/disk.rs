@@ -90,9 +90,9 @@ impl Log {
         // write to buffer => key len | value len | key | value
         writer.write_all(&key_size.to_be_bytes())?;
         writer.write_all(&value.map_or(-1, |v| v.len() as i32).to_be_bytes())?;
-        writer.write_all(&key);
+        writer.write_all(&key)?;
         if let Some(v) = value {
-            writer.write_all(v);
+            writer.write_all(v)?;
         }
         // flush buffer data to disk
         writer.flush()?;
@@ -101,9 +101,9 @@ impl Log {
     }
 
     fn read_value(&mut self, offset: u64, value_size: u32) -> Result<Vec<u8>> {
-        self.file.seek(SeekFrom::Start(offset));
+        self.file.seek(SeekFrom::Start(offset))?;
         let mut buf = vec![0; value_size as usize];
-        let info = self.file.read_exact(&mut buf);
+        self.file.read_exact(&mut buf)?;
         Ok(buf)
     }
 }
