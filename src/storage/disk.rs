@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{btree_map, BTreeMap},
     fs::{File, OpenOptions},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::PathBuf,
@@ -17,7 +17,7 @@ pub struct DiskEngine {
 }
 
 impl DiskEngine {
-    fn new(file_path: PathBuf) -> Result<Self> {
+    pub fn new(file_path: PathBuf) -> Result<Self> {
         let mut log = Log::new(file_path)?;
         // boot, recover keydir
         let keydir = log.build_keydir()?;
@@ -25,26 +25,32 @@ impl DiskEngine {
     }
 
     // rewrite log data to a new tmp file, then set tmp file as formal data file
-    fn new_compact(file_path: PathBuf) -> Result<Self> {
+    pub fn new_compact(file_path: PathBuf) -> Result<Self> {
         let mut eng = Self::new(file_path)?;
         eng.compact()?;
         Ok(eng)
     }
 
     // when we delete or set new value to a key, we will update keydir and append info to log
-     // what we need to do here is to rewrite log by keydir
+    // what we need to do here is to rewrite log by keydir
     fn compact(&mut self) -> Result<()> {
         // create new file with suffix "compact"
         let mut new_path = self.log.file_path.clone();
         new_path.set_extension("compact");
         let mut new_log = Log::new(new_path)?;
-        let mut new_keydir = KeyDir::new();
+        let mut new_keydir: BTreeMap<Vec<u8>, (u64, u32)> = KeyDir::new();
         // rewrite
         for (key, (offset, value_size)) in self.keydir.iter() {
             // get value
             let value = self.log.read_value(*offset, *value_size)?;
             let (new_offset, new_size) = new_log.write_entry(key, Some(&value))?;
-            new_keydir.insert(key.clone(), (new_offset + new_size as u64 - *value_size as u64, *value_size));
+            new_keydir.insert(
+                key.clone(),
+                (
+                    new_offset + new_size as u64 - *value_size as u64,
+                    *value_size,
+                ),
+            );
         }
         // replace tmp file as formal file
         std::fs::rename(&new_log.file_path, &self.log.file_path)?;
@@ -56,7 +62,7 @@ impl DiskEngine {
 }
 
 impl super::engine::Engine for DiskEngine {
-    type EngineIterator<'a> = DiskEngineIterator;
+    type EngineIterator<'a> = DiskEngineIterator<'a>;
     // +----------------+------------------+--------------------+---------------------+
     // | Key Length (4) | Value Length (4) | Key (Variable)     | Value (Variable)    |
     // +----------------+------------------+--------------------+---------------------+
@@ -94,25 +100,41 @@ impl super::engine::Engine for DiskEngine {
     }
 
     fn scan(&mut self, range: impl std::ops::RangeBounds<Vec<u8>>) -> Self::EngineIterator<'_> {
-        todo!()
+        DiskEngineIterator {
+            inner: self.keydir.range(range),
+            log: &mut self.log
+        }
     }
 }
 
-pub struct DiskEngineIterator {}
+pub struct DiskEngineIterator<'a> {
+    inner: btree_map::Range<'a, Vec<u8>, (u64, u32)>,
+    log: &'a mut Log,
+}
 
-impl super::engine::EngineIterator for DiskEngineIterator {}
+impl<'a> DiskEngineIterator<'a> {
+    fn map(&mut self, item: (&Vec<u8>, &(u64, u32))) -> <Self as Iterator>::Item {
+        let (key, (offset, value_size)) = item;
+        let value = self.log.read_value(*offset, *value_size)?;
+        // •	key.clone()：这里调用 clone 是因为 key 是一个引用类型（&Vec<u8>），而我们需要返回一个拥有所有权的 Vec<u8>，所以需要克隆。
+        // •	value：因为 read_value 返回的 value 已经是一个拥有所有权的值，因此可以直接返回。
+        Ok((key.clone(), value))
+    }
+}
 
-impl Iterator for DiskEngineIterator {
+impl<'a> super::engine::EngineIterator for DiskEngineIterator<'a> {}
+
+impl<'a> Iterator for DiskEngineIterator<'a> {
     type Item = Result<(Vec<u8>, Vec<u8>)>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+        self.inner.next().map(|item| self.map(item))
     }
 }
 
-impl DoubleEndedIterator for DiskEngineIterator {
+impl<'a> DoubleEndedIterator for DiskEngineIterator<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        todo!()
+        self.inner.next_back().map(|item| self.map(item))
     }
 }
 
@@ -208,23 +230,23 @@ impl Log {
     }
 
     fn read_entry(buf_reader: &mut BufReader<&File>, offset: u64) -> Result<(Vec<u8>, i32)> {
-        buf_reader.seek(SeekFrom::Start(offset));
+        buf_reader.seek(SeekFrom::Start(offset))?;
         let mut len_buf = [0; 4]; // 4 bytes
                                   // read key size
-        buf_reader.read_exact(&mut len_buf);
+        buf_reader.read_exact(&mut len_buf)?;
         let key_size = u32::from_be_bytes(len_buf);
         // reaf value size, reuse buf
-        buf_reader.read_exact(&mut len_buf);
+        buf_reader.read_exact(&mut len_buf)?;
         let value_size = i32::from_be_bytes(len_buf);
         // read key info
         let mut key = vec![0; key_size as usize];
-        buf_reader.read_exact(&mut key);
+        buf_reader.read_exact(&mut key)?;
         Ok((key, value_size))
     }
 }
 
 #[cfg(test)]
-mod tets {
+mod tests {
     use crate::{
         error::Result,
         storage::{disk::DiskEngine, engine::Engine},
@@ -240,6 +262,12 @@ mod tets {
         eng.set(b"key3".to_vec(), b"value".to_vec())?;
         eng.delete(b"key1".to_vec())?;
         eng.delete(b"key2".to_vec())?;
+        // ➜ xxd tmp/SharkDB-log
+        // 00000000: 0000 0004 0000 0005 6b65 7931 7661 6c75  ........key1valu
+        // 00000010: 6500 0000 0400 0000 056b 6579 3276 616c  e........key2val
+        // 00000020: 7565 0000 0004 0000 0005 6b65 7933 7661  ue........key3va
+        // 00000030: 6c75 6500 0000 04ff ffff ff6b 6579 3100  lue........key1.
+        // 00000040: 0000 04ff ffff ff6b 6579 32              .......key2
 
         // 重写
         eng.set(b"aa".to_vec(), b"value1".to_vec())?;
@@ -248,30 +276,36 @@ mod tets {
         eng.set(b"bb".to_vec(), b"value4".to_vec())?;
         eng.set(b"bb".to_vec(), b"value5".to_vec())?;
 
-        // let iter = eng.scan(..);
-        // let v: Vec<(Vec<u8>, Vec<u8>)> = iter.collect::<Result<Vec<_>>>()?;
-        // assert_eq!(
-        //     v,
-        //     vec![
-        //         (b"aa".to_vec(), b"value3".to_vec()),
-        //         (b"bb".to_vec(), b"value5".to_vec()),
-        //         (b"key3".to_vec(), b"value".to_vec()),
-        //     ]
-        // );
-        // drop(eng);
 
-        // let mut eng2 = DiskEngine::new_compact(PathBuf::from("/Users/zy/Desktop/SharkDB/tmp/SharkDB-log"))?;
-        // let iter2 = eng2.scan(..);
-        // let v2 = iter2.collect::<Result<Vec<_>>>()?;
-        // assert_eq!(
-        //     v2,
-        //     vec![
-        //         (b"aa".to_vec(), b"value3".to_vec()),
-        //         (b"bb".to_vec(), b"value5".to_vec()),
-        //         (b"key3".to_vec(), b"value".to_vec()),
-        //     ]
-        // );
-        // drop(eng2);
+        let iter = eng.scan(..);
+        let v: Vec<(Vec<u8>, Vec<u8>)> = iter.collect::<Result<Vec<_>>>()?;
+        assert_eq!(
+            v,
+            vec![
+                (b"aa".to_vec(), b"value3".to_vec()),
+                (b"bb".to_vec(), b"value5".to_vec()),
+                (b"key3".to_vec(), b"value".to_vec()),
+            ]
+        );
+        drop(eng);
+
+        let mut eng2 = DiskEngine::new_compact(PathBuf::from("/Users/zy/Desktop/SharkDB/tmp/SharkDB-log"))?;
+        let iter2 = eng2.scan(..);
+        let v2 = iter2.collect::<Result<Vec<_>>>()?;
+        assert_eq!(
+            v2,
+            vec![
+                (b"aa".to_vec(), b"value3".to_vec()),
+                (b"bb".to_vec(), b"value5".to_vec()),
+                (b"key3".to_vec(), b"value".to_vec()),
+            ]
+        );
+        drop(eng2);
+        // ➜ xxd tmp/SharkDB-log
+        // 00000000: 0000 0002 0000 0006 6161 7661 6c75 6533  ........aavalue3
+        // 00000010: 0000 0002 0000 0006 6262 7661 6c75 6535  ........bbvalue5
+        // 00000020: 0000 0004 0000 0005 6b65 7933 7661 6c75  ........key3valu
+        // 00000030: 65  
 
         std::fs::remove_dir_all("/Users/zy/Desktop/SharkDB/tmp/")?;
 
