@@ -287,6 +287,7 @@ mod tests {
                 (b"key3".to_vec(), b"value".to_vec()),
             ]
         );
+        // must drop, otherwise we cannot create eng2 because of exclusive lock
         drop(eng);
 
         let mut eng2 = DiskEngine::new_compact(PathBuf::from("/Users/zy/Desktop/SharkDB/tmp/SharkDB-log"))?;
