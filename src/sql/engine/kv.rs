@@ -100,12 +100,12 @@ impl<E: StorageEngine> Transaction for KVTransaction<E> {
     }
 
     fn get_table(&self, table_name: String) -> Result<Option<Table>> {
-        let key = bincode::serialize(&Key::Table(table_name))?;
-        // if exist, map; else return none
-        let val = self.txn.get(key)?
-                                .map(|val| bincode::deserialize(&val))
-                                .transpose()?;
-        Ok(val)
+        let key = Key::Table(table_name);
+        Ok(self
+            .txn
+            .get(bincode::serialize(&key)?)?
+            .map(|v| bincode::deserialize(&v))
+            .transpose()?)
     }
 }
 
