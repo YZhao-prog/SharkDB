@@ -4,6 +4,7 @@ use std::{
     u64,
 };
 
+use bincode::de;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
@@ -90,6 +91,7 @@ impl MvccKey {
 pub enum MvccKeyPrefix {
     NextVersion,
     TxnActive,
+    TxnWrite(Version),
 }
 
 impl MvccKeyPrefix {
@@ -126,10 +128,50 @@ impl<E: Engine> MvccTransaction<E> {
     }
 
     pub fn commit(&self) -> Result<()> {
+        let mut engine = self.engine.lock()?;
+        let mut iter = engine.scan_prefix(MvccKeyPrefix::TxnWrite(self.state.version).encode());
+        let mut delete_keys = Vec::new();
+        while let Some((key, _)) = iter.next().transpose()? {
+            delete_keys.push(key);
+        }
+        // end the life of engine iterator so that we can use engine later
+        drop(iter);
+        // clean txnwrite
+        for key in delete_keys.into_iter() {
+            engine.delete(key)?;
+        }
+        // detete this trasction in active list
+        engine.delete(MvccKey::TxnActive(self.state.version).encode());
         Ok(())
     }
 
     pub fn rollback(&self) -> Result<()> {
+        let mut engine = self.engine.lock()?;
+        let mut iter = engine.scan_prefix(MvccKeyPrefix::TxnWrite(self.state.version).encode());
+        let mut delete_keys = Vec::new();
+        while let Some((key, _)) = iter.next().transpose()? {
+            match MvccKey::decode(key.clone())? {
+                MvccKey::TxnWrite(_, raw_key) => {
+                    // version key
+                    delete_keys.push(MvccKey::Version(raw_key, self.state.version).encode());
+                }
+                _ => {
+                    return Err(Error::Internal(format!(
+                        "UNexpected key {:?}",
+                        String::from_utf8(key)
+                    )))
+                }
+            }
+            delete_keys.push(key); // txnwrite key
+        }
+        // end the life of engine iterator so that we can use engine later
+        drop(iter);
+        // clean txnwrite and version
+        for key in delete_keys.into_iter() {
+            engine.delete(key)?;
+        }
+        // detete this trasction in active list
+        engine.delete(MvccKey::TxnActive(self.state.version).encode());
         Ok(())
     }
 
@@ -145,8 +187,30 @@ impl<E: Engine> MvccTransaction<E> {
     }
 
     pub fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
-        let mut eng = self.engine.lock()?;
-        eng.get(key)
+        let mut engine = self.engine.lock()?;
+        // current version: 9
+        // scan version 0 - 8
+        let from = MvccKey::Version(key.clone(), 0).encode();
+        let to = MvccKey::Version(key.clone(), self.state.version).encode();
+        let mut iter = engine.scan(from..=to).rev();
+        // use rev to reverse iter
+        // 从最新的版本开始读取，找到一个最新的可见的版本
+        while let Some((key, value)) = iter.next().transpose()? {
+            match MvccKey::decode(key.clone())? {
+                MvccKey::Version(_, version) => {
+                    if self.state.is_visible(version) {
+                        return Ok(bincode::deserialize(&value)?);
+                    }
+                }
+                _ => {
+                    return Err(Error::Internal(format!(
+                        "unexpected key: {:?}",
+                        String::from_utf8(key)
+                    )))
+                }
+            }
+        }
+        Ok(None)
     }
 
     // modify/delete data
@@ -169,7 +233,7 @@ impl<E: Engine> MvccTransaction<E> {
         .encode();
         let to = MvccKey::Version(key.clone(), u64::MAX).encode();
         // only need to check last value
-        // eg: active list: 3 4 5 
+        // eg: active list: 3 4 5
         // current version: 6
         // 1. key is sorted, ascending sequence
         // 2. if version 10 modify data and commit, 6 is conflict to modify same data
@@ -184,7 +248,7 @@ impl<E: Engine> MvccTransaction<E> {
                 }
                 _ => {
                     return Err(Error::Internal(format!(
-                        "UNexpected key {:?}",
+                        "Unexpected key {:?}",
                         String::from_utf8(key)
                     )))
                 }
