@@ -9,3 +9,5 @@ bincode = "1.3"
 serde_derive = "1.0"  # 允许使用 #[derive(Serialize, Deserialize)] 注解
 serde_bytes = "0.11.15"
 fs4 = "0.8.4"
+tempfile = "3.12.0"
+
