@@ -4,12 +4,14 @@ use std::{
     u64,
 };
 
-use bincode::de;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-use super::engine::Engine;
+use super::{
+    engine::Engine,
+    keycode::{deserialize_key, serialize_key},
+};
 
 pub type Version = u64;
 
@@ -69,21 +71,22 @@ impl TransactionState {
 // Version key1-101 key2-101...
 // scan preifix
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub enum MvccKey {
     NextVersion,
     TxnActive(Version),
-    TxnWrite(Version, Vec<u8>),
-    Version(Vec<u8>, Version),
+    TxnWrite(Version, #[serde(with = "serde_bytes")] Vec<u8>),
+    Version(#[serde(with = "serde_bytes")] Vec<u8>, Version),
 }
 
+
 impl MvccKey {
-    pub fn encode(&self) -> Vec<u8> {
-        bincode::serialize(self).unwrap()
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        serialize_key(&self)
     }
 
     pub fn decode(data: Vec<u8>) -> Result<Self> {
-        Ok(bincode::deserialize(&data)?)
+        deserialize_key(&data)
     }
 }
 
@@ -92,6 +95,7 @@ pub enum MvccKeyPrefix {
     NextVersion,
     TxnActive,
     TxnWrite(Version),
+    Version(#[serde(with = "serde_bytes")] Vec<u8>),
 }
 
 impl MvccKeyPrefix {
@@ -105,19 +109,19 @@ impl<E: Engine> MvccTransaction<E> {
     pub fn begin(eng: Arc<Mutex<E>>) -> Result<Self> {
         // get the current transaction number
         let mut engine = eng.lock()?;
-        let new_version = match engine.get(MvccKey::NextVersion.encode())? {
+        let new_version = match engine.get(MvccKey::NextVersion.encode()?)? {
             Some(value) => bincode::deserialize(&value)?,
             None => 1, // the first trasaction
         };
         // store next version
         engine.set(
-            MvccKey::NextVersion.encode(),
+            MvccKey::NextVersion.encode()?,
             bincode::serialize(&(new_version + 1))?,
         )?;
         // get active transaction list
         let active_versions = Self::scan_active(&mut engine)?;
         // set current to active, note that current active list(get before) doesn't contain current version
-        engine.set(MvccKey::TxnActive(new_version).encode(), vec![])?;
+        engine.set(MvccKey::TxnActive(new_version).encode()?, vec![])?;
         Ok(Self {
             engine: eng.clone(),
             state: TransactionState {
@@ -141,8 +145,7 @@ impl<E: Engine> MvccTransaction<E> {
             engine.delete(key)?;
         }
         // detete this trasction in active list
-        engine.delete(MvccKey::TxnActive(self.state.version).encode());
-        Ok(())
+        engine.delete(MvccKey::TxnActive(self.state.version).encode()?)
     }
 
     pub fn rollback(&self) -> Result<()> {
@@ -153,7 +156,7 @@ impl<E: Engine> MvccTransaction<E> {
             match MvccKey::decode(key.clone())? {
                 MvccKey::TxnWrite(_, raw_key) => {
                     // version key
-                    delete_keys.push(MvccKey::Version(raw_key, self.state.version).encode());
+                    delete_keys.push(MvccKey::Version(raw_key, self.state.version).encode()?);
                 }
                 _ => {
                     return Err(Error::Internal(format!(
@@ -171,8 +174,7 @@ impl<E: Engine> MvccTransaction<E> {
             engine.delete(key)?;
         }
         // detete this trasction in active list
-        engine.delete(MvccKey::TxnActive(self.state.version).encode());
-        Ok(())
+        engine.delete(MvccKey::TxnActive(self.state.version).encode()?)
     }
 
     // •	self.engine 是一个 Mutex 类型的变量，这意味着它包含一个被锁保护的资源。
@@ -190,8 +192,8 @@ impl<E: Engine> MvccTransaction<E> {
         let mut engine = self.engine.lock()?;
         // current version: 9
         // scan version 0 - 8
-        let from = MvccKey::Version(key.clone(), 0).encode();
-        let to = MvccKey::Version(key.clone(), self.state.version).encode();
+        let from = MvccKey::Version(key.clone(), 0).encode()?;
+        let to = MvccKey::Version(key.clone(), self.state.version).encode()?;
         let mut iter = engine.scan(from..=to).rev();
         // use rev to reverse iter
         // 从最新的版本开始读取，找到一个最新的可见的版本
@@ -230,8 +232,8 @@ impl<E: Engine> MvccTransaction<E> {
                 .copied()
                 .unwrap_or(self.state.version + 1), // if no active, start from current version + 1
         )
-        .encode();
-        let to = MvccKey::Version(key.clone(), u64::MAX).encode();
+        .encode()?;
+        let to = MvccKey::Version(key.clone(), u64::MAX).encode()?;
         // only need to check last value
         // eg: active list: 3 4 5
         // current version: 6
@@ -256,13 +258,13 @@ impl<E: Engine> MvccTransaction<E> {
         }
         // 记录这个 version 写入了哪些 key，用于回滚事务
         engine.set(
-            MvccKey::TxnWrite(self.state.version, key.clone()).encode(),
+            MvccKey::TxnWrite(self.state.version, key.clone()).encode()?,
             vec![],
         )?;
 
         // 写入实际的 key value 数据
         engine.set(
-            MvccKey::Version(key.clone(), self.state.version).encode(),
+            MvccKey::Version(key.clone(), self.state.version).encode()?,
             bincode::serialize(&value)?,
         )?;
         Ok(())
@@ -303,3 +305,5 @@ pub struct ScanResult {
     pub key: Vec<u8>,
     pub value: Vec<u8>,
 }
+
+
