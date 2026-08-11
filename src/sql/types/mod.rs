@@ -12,11 +12,11 @@ pub enum DataType {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
+    Null,
+    Boolean(bool),
     Integer(i64),
     Float(f64),
     String(String),
-    Boolean(bool),
-    Null,
 }
 
 impl Value {
@@ -24,7 +24,7 @@ impl Value {
         match expr {
             Expression::Consts(Consts::Null) => Self::Null,
             Expression::Consts(Consts::Boolean(b)) => Self::Boolean(b),
-            Expression::Consts(Consts::Integer(x)) => Self::Integer(x),
+            Expression::Consts(Consts::Integer(i)) => Self::Integer(i),
             Expression::Consts(Consts::Float(f)) => Self::Float(f),
             Expression::Consts(Consts::String(s)) => Self::String(s),
         }
@@ -34,9 +34,9 @@ impl Value {
         match self {
             Self::Null => None,
             Self::Boolean(_) => Some(DataType::Boolean),
+            Self::Integer(_) => Some(DataType::Integer),
             Self::Float(_) => Some(DataType::Float),
             Self::String(_) => Some(DataType::String),
-            Self::Integer(_) => Some(DataType::Integer),
         }
     }
 }

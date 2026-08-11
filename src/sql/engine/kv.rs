@@ -1,17 +1,26 @@
-
 use serde::{Deserialize, Serialize};
 
-use crate::{error::{Error, Result}, sql::{schema::Table, types::{Row, Value}}, storage::{self, engine::Engine as StorageEngine}};
+use crate::{
+    error::{Error, Result},
+    sql::{
+        schema::Table,
+        types::{Row, Value},
+    },
+    storage::{self, engine::Engine as StorageEngine},
+};
 
 use super::{Engine, Transaction};
 
+// KV Engine 定义
 pub struct KVEngine<E: StorageEngine> {
     pub kv: storage::mvcc::Mvcc<E>,
 }
 
 impl<E: StorageEngine> Clone for KVEngine<E> {
     fn clone(&self) -> Self {
-        Self { kv: self.kv.clone() }
+        Self {
+            kv: self.kv.clone(),
+        }
     }
 }
 
@@ -31,52 +40,62 @@ impl<E: StorageEngine> Engine for KVEngine<E> {
     }
 }
 
+// KV Transaction 定义，实际上对存储引擎中 MvccTransaction 的封装
 pub struct KVTransaction<E: StorageEngine> {
-    txn: storage::mvcc::MvccTransaction<E>
+    txn: storage::mvcc::MvccTransaction<E>,
 }
 
 impl<E: StorageEngine> KVTransaction<E> {
     pub fn new(txn: storage::mvcc::MvccTransaction<E>) -> Self {
-        Self {txn}
+        Self { txn }
     }
 }
 
 impl<E: StorageEngine> Transaction for KVTransaction<E> {
     fn commit(&self) -> Result<()> {
-        Ok(())
+        self.txn.commit()
     }
 
     fn rollback(&self) -> Result<()> {
-        Ok(())
+        self.txn.rollback()
     }
 
     fn create_row(&mut self, table_name: String, row: Row) -> Result<()> {
-        // check row type validation
         let table = self.must_get_table(table_name.clone())?;
+        // 校验行的有效性
         for (i, col) in table.columns.iter().enumerate() {
             match row[i].datatype() {
-                None if col.nullable => {},
-                None =>  return Err(Error::Internal(format!("column {} cannot be null", col.name))),
-                Some(dt) if dt != col.datatype => return Err(Error::Internal(format!("column {} data type mismatch", col.name))),
-                _ => {},
+                None if col.nullable => {}
+                None => {
+                    return Err(Error::Internal(format!(
+                        "column {} cannot be null",
+                        col.name
+                    )))
+                }
+                Some(dt) if dt != col.datatype => {
+                    return Err(Error::Internal(format!(
+                        "column {} type mismatch",
+                        col.name
+                    )))
+                }
+                _ => {}
             }
         }
-        // store data in memeory store engine
-        // temporarily use row[0] (the first column) as primary key  (to be continue)
+
+        // 存放数据
+        // 暂时以第一列作为主键，一行数据的唯一标识，todo
         let id = Key::Row(table_name.clone(), row[0].clone());
-        let key = bincode::serialize(&id)?;
         let value = bincode::serialize(&row)?;
-        self.txn.set(key, value)?;
+        self.txn.set(bincode::serialize(&id)?, value)?;
 
         Ok(())
     }
 
     fn scan_table(&self, table_name: String) -> Result<Vec<Row>> {
-        // 在 Key 枚举中，Row 类型的键是由 Key::Row(table_name, row) 表示的，包含了表名和行的具体数据。
-        // 因此，KeyPrefix::Row(table_name) 作为前缀，可以用来定位所有以给定表名开头的行数据。
         let prefix = KeyPrefix::Row(table_name.clone());
         let results = self.txn.scan_prefix(bincode::serialize(&prefix)?)?;
-        let mut rows  = Vec::new();
+
+        let mut rows = Vec::new();
         for result in results {
             let row: Row = bincode::deserialize(&result.value)?;
             rows.push(row);
@@ -85,17 +104,26 @@ impl<E: StorageEngine> Transaction for KVTransaction<E> {
     }
 
     fn create_table(&mut self, table: Table) -> Result<()> {
-        // check if the table exists
+        // 判断表是否已经存在
         if self.get_table(table.name.clone())?.is_some() {
-            return Err(Error::Internal(format!("Table {} already exist.", table.name)));
+            return Err(Error::Internal(format!(
+                "table {} already exists",
+                table.name
+            )));
         }
-        // check validation
+
+        // 判断表的有效性
         if table.columns.is_empty() {
-            return Err(Error::Internal(format!("Table {} has no columns.", table.name)));
+            return Err(Error::Internal(format!(
+                "table {} has no columns",
+                table.name
+            )));
         }
-        let key = bincode::serialize(&Key::Table(table.name.clone()))?;
+
+        let key = Key::Table(table.name.clone());
         let value = bincode::serialize(&table)?;
-        self.txn.set(key, value)?;
+        self.txn.set(bincode::serialize(&key)?, value)?;
+
         Ok(())
     }
 
@@ -111,17 +139,14 @@ impl<E: StorageEngine> Transaction for KVTransaction<E> {
 
 #[derive(Debug, Serialize, Deserialize)]
 enum Key {
-    Table(String),// table name
-    Row(String, Value), // table name, value
+    Table(String),
+    Row(String, Value),
 }
 
-// KeyPrefix::Table 是为了与Key::Table对齐。在序列化后的字节中：
-// 	•	Table 会以 0x01 开头。
-// 	•	Row(String) 会以 0x02 开头。
 #[derive(Debug, Serialize, Deserialize)]
 enum KeyPrefix {
-    Table, // align
-    Row(String), // table name
+    Table,
+    Row(String),
 }
 
 #[cfg(test)]
@@ -140,8 +165,8 @@ mod tests {
         s.execute("insert into t1 values(2, 'b');")?;
         s.execute("insert into t1(c, a) values(200, 3);")?;
 
-        let v = s.execute("select * from t1;")?;
-        println!("{:?}", v);
+        s.execute("select * from t1;")?;
+
         Ok(())
     }
 }

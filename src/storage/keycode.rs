@@ -20,20 +20,17 @@ pub struct Serializer {
     output: Vec<u8>,
 }
 
-// customize serializer
 impl<'a> ser::Serializer for &'a mut Serializer {
     type Ok = ();
 
     type Error = Error;
 
-    // need to implement
     type SerializeSeq = Self;
 
     type SerializeTuple = Self;
 
     type SerializeTupleVariant = Self;
 
-    // no need to implement
     type SerializeTupleStruct = serde::ser::Impossible<Self::Ok, Self::Error>;
 
     type SerializeMap = serde::ser::Impossible<Self::Ok, Self::Error>;
@@ -75,7 +72,6 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_u64(self, v: u64) -> Result<()> {
-        // u64 -> [u8]
         self.output.extend(v.to_be_bytes());
         Ok(())
     }
@@ -96,7 +92,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         todo!()
     }
 
-    // origin          encode
+    // 原始值           编码后
     // 97 98 99     -> 97 98 99 0 0
     // 97 98 0 99   -> 97 98 0 255 99 0 0
     // 97 98 0 0 99 -> 97 98 0 255 0 255 99 0 0
@@ -108,8 +104,9 @@ impl<'a> ser::Serializer for &'a mut Serializer {
                 b => res.push(*b),
             }
         }
-        //put 0 0 mark the end
+        // 放 0 0 表示结尾
         res.extend([0, 0]);
+
         self.output.extend(res);
         Ok(())
     }
@@ -133,15 +130,13 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         todo!()
     }
 
-    // eg: MvccKey::NextVersion
+    // 类似 MvccKey::NextVersion
     fn serialize_unit_variant(
         self,
-        name: &'static str,       // Name of the enum type (e.g., "Color")
-        variant_index: u32,       // Index of the variant in the enum (starting from 0)
-        variant: &'static str,    // Name of the variant (e.g., "Red")
+        name: &'static str,
+        variant_index: u32,
+        variant: &'static str,
     ) -> Result<()> {
-        // Attempt to convert the variant index from u32 to u8 and add it to the output.
-        // This assumes that the total number of variants does not exceed 255.
         self.output.extend(u8::try_from(variant_index));
         Ok(())
     }
@@ -153,20 +148,18 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         todo!()
     }
 
-    // eg: TxnAcvtive(Version)
+    // 类似 TxnAcvtive(Version)
     fn serialize_newtype_variant<T>(
         self,
         name: &'static str,
         variant_index: u32,
         variant: &'static str,
-        value: &T, // Version
+        value: &T,
     ) -> Result<()>
     where
         T: ?Sized + ser::Serialize,
     {
-        // store index in output
         self.serialize_unit_variant(name, variant_index, variant)?;
-        // Store version, Version should be u64, it will trigger func serialize_u64
         value.serialize(self)
     }
 
@@ -186,14 +179,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         todo!()
     }
 
-    // eg: TxnWrite(Version, Vec<u8>)
-    // 方法返回 Ok(self)，这里的 self 是当前的序列化器实例，并且它实现了 SerializeTupleVariant trait。
-	// •	返回后的序列化器实例会被用来依次调用 serialize_field（在 SerializeTupleVariant trait 中定义）来序列化元组内的每个字段。
-	// •	例如，对于 TxnWrite(Version, Vec<u8>)，调用顺序大致是：
-	// •	外层先序列化 TxnWrite 这个变体的标识（通过 serialize_unit_variant），
-	// •	然后序列化内部的第一个字段 Version（调用 serialize_field），
-	// •	接着序列化第二个字段 Vec<u8>（再次调用 serialize_field），
-	// •	最后调用 end 方法结束整个元组变体的序列化。
+    // 类似 TxnWrite(Version, Vec<u8>)
     fn serialize_tuple_variant(
         self,
         name: &'static str,
@@ -228,21 +214,14 @@ impl<'a> ser::SerializeSeq for &'a mut Serializer {
     type Ok = ();
 
     type Error = Error;
-    // 	•	方法 serialize_element：
-	// •	每调用一次 serialize_element 就表示对序列中的一个元素进行序列化。
-	// •	方法中调用了 value.serialize(&mut **self)：
-	// •	self 的类型是 &mut Serializer，其中一层 * 解引用后得到 Serializer。
-	// •	&mut **self 则表示取出 Serializer 后，再获取它的可变引用，这样就能传递给 value.serialize 方法。
-	// •	这样做的目的是让每个元素都使用同一个序列化器进行序列化，确保序列化过程共享同一个上下文。
+
     fn serialize_element<T>(&mut self, value: &T) -> Result<()>
     where
         T: ?Sized + ser::Serialize,
     {
         value.serialize(&mut **self)
     }
-	// •	方法 end：
-	// •	在序列中的所有元素都已序列化完成后，会调用 end 方法结束序列化过程。
-	// •	当前实现只是简单返回 Ok(())，表示序列结束时无需额外操作。
+
     fn end(self) -> Result<()> {
         Ok(())
     }
@@ -288,9 +267,7 @@ pub struct Deserializer<'de> {
 
 impl<'de> Deserializer<'de> {
     fn take_bytes(&mut self, len: usize) -> &[u8] {
-        // get and consume len bytes
         let bytes = &self.input[..len];
-        // cut array
         self.input = &self.input[len..];
         bytes
     }
@@ -299,12 +276,11 @@ impl<'de> Deserializer<'de> {
     // - 如果这个 0 之后的值是 0，说明是字符串的结尾
     fn next_bytes(&mut self) -> Result<Vec<u8>> {
         let mut res = Vec::new();
-        // 由于需要根据当前位置来截断输入数据，使用 enumerate() 可以直接获得当前字节的索引 （i, val），从而精确更新 self.input。
         let mut iter = self.input.iter().enumerate();
         let i = loop {
             match iter.next() {
                 Some((_, 0)) => match iter.next() {
-                    Some((i, 0)) => break i + 1, // return new input start index
+                    Some((i, 0)) => break i + 1,
                     Some((_, 255)) => res.push(0),
                     _ => return Err(Error::Internal("unexpected input".into())),
                 },
@@ -383,16 +359,14 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut Deserializer<'de> {
         todo!()
     }
 
+    // &[u8] -> Vec<u8>
+    // From TryFrom
     fn deserialize_u64<V>(self, visitor: V) -> Result<V::Value>
     where
         V: de::Visitor<'de>,
     {
-        // u64 -> 8 bytes
         let bytes = self.take_bytes(8);
-        // &[u8] -> Vec<u8> -> u64
         let v = u64::from_be_bytes(bytes.try_into()?);
-        // 如何将这个基本类型转换为最终用户所期望的类型（V::Value）则由 Visitor 来决定
-        // 通过 visitor.visit_u64(v)，反序列化器将 u64 传递给调用者定义的 Visitor，由 Visitor 决定如何构造最终结果。
         visitor.visit_u64(v)
     }
 
@@ -603,7 +577,7 @@ impl<'de, 'a> de::VariantAccess<'de> for &mut Deserializer<'de> {
 #[cfg(test)]
 mod tests {
     use crate::storage::{
-        keycode::{serialize_key, deserialize_key},
+        keycode::{deserialize_key, serialize_key},
         mvcc::{MvccKey, MvccKeyPrefix},
     };
 
@@ -615,7 +589,7 @@ mod tests {
         };
 
         ser_cmp(MvccKey::NextVersion, vec![0]);
-        ser_cmp(MvccKey::TxnActive(1), vec![1, 0, 0, 0, 0, 0, 0, 0, 1]); // 1（index） + u8
+        ser_cmp(MvccKey::TxnAcvtive(1), vec![1, 0, 0, 0, 0, 0, 0, 0, 1]);
         ser_cmp(
             MvccKey::TxnWrite(1, vec![1, 2, 3]),
             vec![2, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 3, 0, 0],
@@ -623,7 +597,6 @@ mod tests {
         ser_cmp(
             MvccKey::Version(b"abc".to_vec(), 11),
             vec![3, 97, 98, 99, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11],
-            //    idx  a   b   c  end + 11
         );
     }
 
@@ -635,7 +608,7 @@ mod tests {
         };
 
         ser_cmp(MvccKeyPrefix::NextVersion, vec![0]);
-        ser_cmp(MvccKeyPrefix::TxnActive, vec![1]);
+        ser_cmp(MvccKeyPrefix::TxnAcvtive, vec![1]);
         ser_cmp(MvccKeyPrefix::TxnWrite(1), vec![2, 0, 0, 0, 0, 0, 0, 0, 1]);
         ser_cmp(
             MvccKeyPrefix::Version(b"ab".to_vec()),
@@ -651,7 +624,7 @@ mod tests {
         };
 
         der_cmp(MvccKey::NextVersion, vec![0]);
-        der_cmp(MvccKey::TxnActive(1), vec![1, 0, 0, 0, 0, 0, 0, 0, 1]);
+        der_cmp(MvccKey::TxnAcvtive(1), vec![1, 0, 0, 0, 0, 0, 0, 0, 1]);
         der_cmp(
             MvccKey::TxnWrite(1, vec![1, 2, 3]),
             vec![2, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 3, 0, 0],
@@ -662,11 +635,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_u8_convert() {
-        let v = [1 as u8, 2, 3];
-        let vv = &v;
-        let vvv: Vec<u8> = vv.try_into().unwrap();
-        println!("{:?}", vvv); // [1, 2, 3]
-    }
+    // #[test]
+    // fn test_u8_convert() {
+    //     let v = [1 as u8, 2, 3];
+    //     let vv = &v;
+    //     let vvv: Vec<u8> = vv.try_into().unwrap();
+    //     println!("{:?}", vvv);
+    // }
 }

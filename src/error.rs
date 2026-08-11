@@ -3,6 +3,7 @@ use std::{array::TryFromSliceError, fmt::Display, sync::PoisonError};
 use bincode::ErrorKind;
 use serde::{de, ser};
 
+// 自定义 Result 类型
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Clone, PartialEq)]

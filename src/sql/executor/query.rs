@@ -18,7 +18,7 @@ impl<T: Transaction> Executor<T> for Scan {
         let rows = txn.scan_table(self.table_name.clone())?;
         Ok(ResultSet::Scan {
             columns: table.columns.into_iter().map(|c| c.name.clone()).collect(),
-            row: rows,
+            rows,
         })
     }
 }

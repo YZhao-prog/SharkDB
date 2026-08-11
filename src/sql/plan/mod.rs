@@ -2,31 +2,45 @@ use planner::Planner;
 
 use crate::error::Result;
 
-use super::{engine::Transaction, executor::{Executor, ResultSet}, parser::ast::{self, Expression}, schema::Table};
+use super::{
+    engine::Transaction,
+    executor::{Executor, ResultSet},
+    parser::ast::{self, Expression},
+    schema::Table,
+};
+
 mod planner;
-// plan node
+
+// 执行节点
 #[derive(Debug, PartialEq)]
 pub enum Node {
+    // 创建表
     CreateTable {
         schema: Table,
     },
+
+    // 插入数据
     Insert {
         table_name: String,
         columns: Vec<String>,
         values: Vec<Vec<Expression>>,
     },
+
+    // 扫描节点
     Scan {
         table_name: String,
     },
 }
 
 #[derive(Debug, PartialEq)]
+// 执行计划定义，底层是不同类型执行节点
 pub struct Plan(pub Node);
 
 impl Plan {
     pub fn build(stmt: ast::Statement) -> Self {
         Planner::new().build(stmt)
     }
+
     pub fn execute<T: Transaction>(self, txn: &mut T) -> Result<ResultSet> {
         <dyn Executor<T>>::build(self.0).execute(txn)
     }
@@ -72,7 +86,7 @@ mod tests {
 
         Ok(())
     }
-    
+
     #[test]
     fn test_plan_insert() -> Result<()> {
         let sql1 = "insert into tbl1 values (1, 2, 3, 'a', true);";

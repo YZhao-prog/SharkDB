@@ -1,5 +1,6 @@
 use crate::sql::types::DataType;
 
+// Abstract Syntax Tree 抽象语法树定义
 #[derive(Debug, PartialEq)]
 pub enum Statement {
     CreateTable {
@@ -16,6 +17,7 @@ pub enum Statement {
     },
 }
 
+// 列定义
 #[derive(Debug, PartialEq)]
 pub struct Column {
     pub name: String,
@@ -24,12 +26,12 @@ pub struct Column {
     pub default: Option<Expression>,
 }
 
+// 表达式定义，目前只有常量
 #[derive(Debug, PartialEq)]
 pub enum Expression {
     Consts(Consts),
 }
 
-// Use const.into() converse Consts to Expression
 impl From<Consts> for Expression {
     fn from(value: Consts) -> Self {
         Self::Consts(value)

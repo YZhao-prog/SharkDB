@@ -2,36 +2,49 @@ use std::ops::{Bound, RangeBounds};
 
 use crate::error::Result;
 
-// abstract defination of engine
-// can connect to different engine(eg: memory kV engine, disk KV engine)
+// 抽象存储引擎接口定义，接入不同的存储引擎，目前支持内存和简单的磁盘 KV 存储
 pub trait Engine {
-    type EngineIterator<'a>: EngineIterator where Self: 'a;
-    // set key value
+    type EngineIterator<'a>: EngineIterator
+    where
+        Self: 'a;
+
+    // 设置 key/value
     fn set(&mut self, key: Vec<u8>, value: Vec<u8>) -> Result<()>;
-    // get value by key
+
+    // 获取 key 对应的数据
     fn get(&mut self, key: Vec<u8>) -> Result<Option<Vec<u8>>>;
-    // delete key, if key not exist, ignore it
+
+    // 删除 key 对应的数据，如果 key 不存在的话则忽略
     fn delete(&mut self, key: Vec<u8>) -> Result<()>;
-    // scan the engine
+
+    // 扫描
     fn scan(&mut self, range: impl RangeBounds<Vec<u8>>) -> Self::EngineIterator<'_>;
-    // scan prefix
+
+    // 前缀扫描
     fn scan_prefix(&mut self, prefix: Vec<u8>) -> Self::EngineIterator<'_> {
-        // prefix: aaaa
         // start: aaaa
-        // end: aaab
-        // [aaaa, aaab) match all prefix aaaa
+        // end:   aaab
         let start = Bound::Included(prefix.clone());
-        let mut bound_prefix = prefix.clone();
-        if let Some(last) = bound_prefix.iter_mut().last() {
-            *last += 1;
+        // 计算前缀的结束边界：从后往前找到第一个不是 0xff 的字节加一，并去掉其后的字节
+        // 例如 [0x01, 0xff] -> [0x02]；如果全部是 0xff，则扫描到末尾
+        let mut bound_prefix = prefix;
+        let end = loop {
+            match bound_prefix.last_mut() {
+                Some(b) if *b == u8::MAX => {
+                    bound_prefix.pop();
+                }
+                Some(b) => {
+                    *b += 1;
+                    break Bound::Excluded(bound_prefix);
+                }
+                None => break Bound::Unbounded,
+            }
         };
-        let end = Bound::Excluded(bound_prefix);
+
         self.scan((start, end))
     }
 }
 
-// let iterator support double sides scan
-// item means the return value type of iterator
 pub trait EngineIterator: DoubleEndedIterator<Item = Result<(Vec<u8>, Vec<u8>)>> {}
 
 #[cfg(test)]
@@ -120,6 +133,24 @@ mod tests {
         assert_eq!(key1, b"camhue".to_vec());
         let (key2, _) = iter.next().transpose()?.unwrap();
         assert_eq!(key2, b"canehe".to_vec());
+        drop(iter);
+
+        // 前缀以 0xff 结尾的情况，结束边界不能简单地加一
+        eng.set(vec![0x01, 0xff, 0x01], b"v1".to_vec())?;
+        eng.set(vec![0x01, 0xff, 0xff], b"v2".to_vec())?;
+        eng.set(vec![0x02, 0x00, 0x00], b"v3".to_vec())?;
+
+        let mut iter = eng.scan_prefix(vec![0x01, 0xff]);
+        let (key1, _) = iter.next().transpose()?.unwrap();
+        assert_eq!(key1, vec![0x01, 0xff, 0x01]);
+        let (key2, _) = iter.next().transpose()?.unwrap();
+        assert_eq!(key2, vec![0x01, 0xff, 0xff]);
+        assert!(iter.next().is_none());
+        drop(iter);
+
+        // 前缀全部是 0xff 的情况，扫描到末尾
+        let mut iter = eng.scan_prefix(vec![0xff, 0xff]);
+        assert!(iter.next().is_none());
 
         Ok(())
     }
