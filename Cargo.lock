@@ -4,13 +4,12 @@ version = 3
 
 [[package]]
 name = "SharkDB"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bincode",
  "fs4",
  "serde",
  "serde_bytes",
- "serde_derive",
  "tempfile",
 ]
 

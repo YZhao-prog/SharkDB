@@ -23,7 +23,7 @@ const VALUE_SIZE: usize = 100;
 const ROUNDS: usize = 5;
 
 fn main() -> Result<()> {
-    println!("sqldb-rs benchmark ({} rounds, median reported)", ROUNDS);
+    println!("SharkDB benchmark ({} rounds, median reported)", ROUNDS);
     println!("{:-<72}", "");
     println!(
         "{:<32} {:>12} {:>12} {:>10}",
