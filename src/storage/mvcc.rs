@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::HashSet,
     sync::{Arc, Mutex, MutexGuard},
     u64,
 };
@@ -228,31 +228,45 @@ impl<E: Engine> MvccTransaction<E> {
         // 去掉最后的 [0, 0] 后缀
         enc_prefix.truncate(enc_prefix.len() - 2);
 
+        // 引擎扫描按 key 有序，同一个 raw key 的所有版本相邻且版本号递增，
+        // 因此可以流式处理：跟踪当前 key 的最新可见版本，key 变化时输出，
+        // 每个 key 只做一次 value 解码，避免中间 BTreeMap 和逐版本解码
         let mut iter = eng.scan_prefix(enc_prefix);
-        let mut results = BTreeMap::new();
-        while let Some((key, value)) = iter.next().transpose()? {
-            match MvccKey::decode(key.clone())? {
-                MvccKey::Version(raw_key, version) => {
-                    if self.state.is_visible(version) {
-                        match bincode::deserialize(&value)? {
-                            Some(raw_value) => results.insert(raw_key, raw_value),
-                            None => results.remove(&raw_key),
-                        };
-                    }
-                }
-                _ => {
-                    return Err(Error::Internal(format!(
-                        "Unexepected key {:?}",
-                        String::from_utf8(key)
-                    )))
+        let mut results = Vec::new();
+        // (raw key, 未解码的最新可见版本)
+        let mut current: Option<(Vec<u8>, Vec<u8>)> = None;
+
+        let mut emit = |current: &mut Option<(Vec<u8>, Vec<u8>)>,
+                        results: &mut Vec<ScanResult>|
+         -> Result<()> {
+            if let Some((key, value)) = current.take() {
+                // 墓碑（删除标记）不输出
+                if let Some(value) = bincode::deserialize::<Option<Vec<u8>>>(&value)? {
+                    results.push(ScanResult { key, value });
                 }
             }
-        }
+            Ok(())
+        };
 
-        Ok(results
-            .into_iter()
-            .map(|(key, value)| ScanResult { key, value })
-            .collect())
+        while let Some((key, value)) = iter.next().transpose()? {
+            // 扫描热路径：手写解码代替 serde 反序列化
+            let (raw_key, version) = decode_version_key(&key)?;
+            if !self.state.is_visible(version) {
+                continue;
+            }
+            match &mut current {
+                // 同一个 key 的更新版本，覆盖候选值
+                Some((ck, cv)) if *ck == raw_key => *cv = value,
+                Some(_) => {
+                    emit(&mut current, &mut results)?;
+                    current = Some((raw_key, value));
+                }
+                None => current = Some((raw_key, value)),
+            }
+        }
+        emit(&mut current, &mut results)?;
+
+        Ok(results)
     }
 
     // 更新/删除数据
@@ -337,6 +351,65 @@ impl<E: Engine> MvccTransaction<E> {
 pub struct ScanResult {
     pub key: Vec<u8>,
     pub value: Vec<u8>,
+}
+
+// MvccKey::Version 的手写解码，扫描热路径避免 serde 反序列化的开销
+// 编码格式（见 keycode）：[变体索引 3][key，0x00 转义为 0x00 0xFF][0x00 0x00][8 字节大端 version]
+fn decode_version_key(key: &[u8]) -> Result<(Vec<u8>, Version)> {
+    if key.first() != Some(&3) {
+        return Err(Error::Internal("unexpected key in version scan".into()));
+    }
+    let mut raw = Vec::with_capacity(key.len());
+    let mut i = 1;
+    loop {
+        match key.get(i) {
+            Some(0) => match key.get(i + 1) {
+                // 0x00 0x00 是结束符
+                Some(0) => {
+                    i += 2;
+                    break;
+                }
+                // 0x00 0xFF 是转义的 0x00
+                Some(255) => {
+                    raw.push(0);
+                    i += 2;
+                }
+                _ => return Err(Error::Internal("malformed version key".into())),
+            },
+            Some(b) => {
+                raw.push(*b);
+                i += 1;
+            }
+            None => return Err(Error::Internal("malformed version key".into())),
+        }
+    }
+    let bytes: [u8; 8] = key
+        .get(i..i + 8)
+        .and_then(|s| s.try_into().ok())
+        .ok_or(Error::Internal("malformed version key".into()))?;
+    Ok((raw, Version::from_be_bytes(bytes)))
+}
+
+#[cfg(test)]
+mod decode_tests {
+    use super::*;
+
+    #[test]
+    fn test_decode_version_key_matches_serde() -> Result<()> {
+        // 手写解码必须与 serde 编码严格互逆，包括含 0x00 的 key
+        for raw in [
+            b"normal".to_vec(),
+            vec![0x00, 0x01, 0x00],
+            vec![],
+            vec![0xff, 0x00],
+        ] {
+            for version in [0u64, 1, 42, u64::MAX] {
+                let encoded = MvccKey::Version(raw.clone(), version).encode()?;
+                assert_eq!(decode_version_key(&encoded)?, (raw.clone(), version));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

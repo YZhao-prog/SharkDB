@@ -36,6 +36,7 @@ fn main() -> Result<()> {
     bench_storage_lsm()?;
     bench_mvcc()?;
     bench_sql()?;
+    bench_sql_analytics()?;
 
     println!("{:-<72}", "");
     Ok(())
@@ -271,6 +272,71 @@ fn bench_sql() -> Result<()> {
     Ok(())
 }
 
+// 分析型查询：过滤 + 分组聚合，对比单线程与并行执行；以及优化器主键点查
+fn bench_sql_analytics() -> Result<()> {
+    let eng = KVEngine::new(MemoryEngine::new());
+    let mut s = eng.session()?;
+    s.execute("create table facts (id int primary key, grp int, val float);")?;
+
+    // 装载 20 万行（每条语句批量插入 100 行）
+    let n = 200_000;
+    for batch in 0..(n / 100) {
+        let values = (0..100)
+            .map(|i| {
+                let id = batch * 100 + i;
+                format!("({}, {}, {}.5)", id, id % 16, id % 500)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        s.execute(&format!("insert into facts values {};", values))?;
+    }
+
+    // 多条件过滤 + 多聚合的分析型查询
+    let query = "select grp, count(*), sum(val), avg(val), min(val), max(val), sum(val * val)
+                 from facts where val > 100.0 and val * 2.0 < 900.0 group by grp;";
+    let scans = 10;
+
+    sharkdb::sql::executor::set_parallelism(1);
+    let seq = report("sql/analytic 200k rows (1 thread)", scans, || {
+        run(|| {
+            for _ in 0..scans {
+                std::hint::black_box(s.execute(query)?);
+            }
+            Ok(())
+        })
+    })?;
+
+    sharkdb::sql::executor::set_parallelism(0); // 自动 = CPU 核数
+    let par = report("sql/analytic 200k rows (N threads)", scans, || {
+        run(|| {
+            for _ in 0..scans {
+                std::hint::black_box(s.execute(query)?);
+            }
+            Ok(())
+        })
+    })?;
+    println!(
+        "{:<32} {:>12.2}x",
+        "sql/analytic parallel speedup",
+        seq / par
+    );
+
+    // 主键点查（优化器改写为 PointLookup，避免全表扫描）
+    let lookups = 10_000;
+    report("sql/point select (pk lookup)", lookups, || {
+        let mut rng = Rng::new(9);
+        run(|| {
+            for _ in 0..lookups {
+                let id = rng.next() % n as u64;
+                std::hint::black_box(s.execute(&format!("select * from facts where id = {};", id))?);
+            }
+            Ok(())
+        })
+    })?;
+
+    Ok(())
+}
+
 // ---------------- 基准测试工具 ----------------
 
 // 计时一次闭包执行
@@ -280,9 +346,9 @@ fn run(mut f: impl FnMut() -> Result<()>) -> Result<f64> {
     Ok(start.elapsed().as_secs_f64())
 }
 
-// 执行 ROUNDS 轮（外加一轮预热），取中位数，打印一行结果
+// 执行 ROUNDS 轮（外加一轮预热），取中位数，打印一行结果并返回中位数耗时
 // setup 每轮重建自己的状态，返回该轮耗时
-fn report(name: &str, ops: usize, mut round: impl FnMut() -> Result<f64>) -> Result<()> {
+fn report(name: &str, ops: usize, mut round: impl FnMut() -> Result<f64>) -> Result<f64> {
     round()?; // 预热
     let mut times: Vec<f64> = (0..ROUNDS).map(|_| round()).collect::<Result<_>>()?;
     times.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -294,7 +360,7 @@ fn report(name: &str, ops: usize, mut round: impl FnMut() -> Result<f64>) -> Res
         "{:<32} {:>12} {:>12.0} {:>10.0}",
         name, ops, ops_per_sec, ns_per_op
     );
-    Ok(())
+    Ok(median)
 }
 
 // 确定性伪随机数（SplitMix64），保证 set/get 用相同种子能生成相同 key 序列

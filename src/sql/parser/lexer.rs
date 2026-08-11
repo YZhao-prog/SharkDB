@@ -28,6 +28,20 @@ pub enum Token {
     Minus,
     // 斜杠 /
     Slash,
+    // 等号 =
+    Equal,
+    // 不等 != 或 <>
+    NotEqual,
+    // 大于 >
+    GreaterThan,
+    // 大于等于 >=
+    GreaterThanOrEqual,
+    // 小于 <
+    LessThan,
+    // 小于等于 <=
+    LessThanOrEqual,
+    // 点号 . （限定列名 t.a）
+    Period,
 }
 
 impl Display for Token {
@@ -45,6 +59,13 @@ impl Display for Token {
             Token::Plus => "+",
             Token::Minus => "-",
             Token::Slash => "/",
+            Token::Equal => "=",
+            Token::NotEqual => "!=",
+            Token::GreaterThan => ">",
+            Token::GreaterThanOrEqual => ">=",
+            Token::LessThan => "<",
+            Token::LessThanOrEqual => "<=",
+            Token::Period => ".",
         })
     }
 }
@@ -74,6 +95,26 @@ pub enum Keyword {
     Null,
     Primary,
     Key,
+    Where,
+    Update,
+    Set,
+    Delete,
+    Order,
+    By,
+    Asc,
+    Desc,
+    Limit,
+    Offset,
+    Group,
+    Having,
+    Join,
+    On,
+    Cross,
+    Inner,
+    As,
+    And,
+    Or,
+    Explain,
 }
 
 impl Keyword {
@@ -102,6 +143,26 @@ impl Keyword {
             "NULL" => Keyword::Null,
             "PRIMARY" => Keyword::Primary,
             "KEY" => Keyword::Key,
+            "WHERE" => Keyword::Where,
+            "UPDATE" => Keyword::Update,
+            "SET" => Keyword::Set,
+            "DELETE" => Keyword::Delete,
+            "ORDER" => Keyword::Order,
+            "BY" => Keyword::By,
+            "ASC" => Keyword::Asc,
+            "DESC" => Keyword::Desc,
+            "LIMIT" => Keyword::Limit,
+            "OFFSET" => Keyword::Offset,
+            "GROUP" => Keyword::Group,
+            "HAVING" => Keyword::Having,
+            "JOIN" => Keyword::Join,
+            "ON" => Keyword::On,
+            "CROSS" => Keyword::Cross,
+            "INNER" => Keyword::Inner,
+            "AS" => Keyword::As,
+            "AND" => Keyword::And,
+            "OR" => Keyword::Or,
+            "EXPLAIN" => Keyword::Explain,
             _ => return None,
         })
     }
@@ -131,6 +192,26 @@ impl Keyword {
             Keyword::Null => "NULL",
             Keyword::Primary => "PRIMARY",
             Keyword::Key => "KEY",
+            Keyword::Where => "WHERE",
+            Keyword::Update => "UPDATE",
+            Keyword::Set => "SET",
+            Keyword::Delete => "DELETE",
+            Keyword::Order => "ORDER",
+            Keyword::By => "BY",
+            Keyword::Asc => "ASC",
+            Keyword::Desc => "DESC",
+            Keyword::Limit => "LIMIT",
+            Keyword::Offset => "OFFSET",
+            Keyword::Group => "GROUP",
+            Keyword::Having => "HAVING",
+            Keyword::Join => "JOIN",
+            Keyword::On => "ON",
+            Keyword::Cross => "CROSS",
+            Keyword::Inner => "INNER",
+            Keyword::As => "AS",
+            Keyword::And => "AND",
+            Keyword::Or => "OR",
+            Keyword::Explain => "EXPLAIN",
         }
     }
 }
@@ -285,6 +366,32 @@ impl<'a> Lexer<'a> {
 
     // 扫描符号
     fn scan_symbol(&mut self) -> Option<Token> {
+        // 双字符符号：>=、<=、<>、!=
+        match self.iter.peek() {
+            Some('>') => {
+                self.iter.next();
+                return Some(if self.next_if(|c| c == '=').is_some() {
+                    Token::GreaterThanOrEqual
+                } else {
+                    Token::GreaterThan
+                });
+            }
+            Some('<') => {
+                self.iter.next();
+                return Some(if self.next_if(|c| c == '=').is_some() {
+                    Token::LessThanOrEqual
+                } else if self.next_if(|c| c == '>').is_some() {
+                    Token::NotEqual
+                } else {
+                    Token::LessThan
+                });
+            }
+            Some('!') => {
+                self.iter.next();
+                return self.next_if(|c| c == '=').map(|_| Token::NotEqual);
+            }
+            _ => {}
+        }
         self.next_if_token(|c| match c {
             '*' => Some(Token::Asterisk),
             '(' => Some(Token::OpenParen),
@@ -294,6 +401,8 @@ impl<'a> Lexer<'a> {
             '+' => Some(Token::Plus),
             '-' => Some(Token::Minus),
             '/' => Some(Token::Slash),
+            '=' => Some(Token::Equal),
+            '.' => Some(Token::Period),
             _ => None,
         })
     }

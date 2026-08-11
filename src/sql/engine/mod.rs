@@ -1,6 +1,12 @@
 use crate::error::{Error, Result};
 
-use super::{executor::ResultSet, parser::Parser, plan::Plan, schema::Table, types::Row};
+use super::{
+    executor::ResultSet,
+    parser::Parser,
+    plan::Plan,
+    schema::Table,
+    types::{Row, Value},
+};
 
 pub mod kv;
 
@@ -27,6 +33,12 @@ pub trait Transaction {
 
     // 创建行
     fn create_row(&mut self, table_name: String, row: Row) -> Result<()>;
+    // 更新行，id 是该行原来的主键
+    fn update_row(&mut self, table: &Table, id: &Value, row: Row) -> Result<()>;
+    // 删除行
+    fn delete_row(&mut self, table: &Table, id: &Value) -> Result<()>;
+    // 按主键点查一行
+    fn read_row(&self, table_name: &str, id: &Value) -> Result<Option<Row>>;
     // 扫描表
     fn scan_table(&self, table_name: String) -> Result<Vec<Row>>;
 
@@ -52,20 +64,17 @@ pub struct Session<E: Engine> {
 impl<E: Engine> Session<E> {
     // 执行客户端 SQL 语句
     pub fn execute(&mut self, sql: &str) -> Result<ResultSet> {
-        match Parser::new(sql).parse()? {
-            stmt => {
-                let mut txn = self.engine.begin()?;
-                // 构建 plan，执行 SQL 语句
-                match Plan::build(stmt).execute(&mut txn) {
-                    Ok(result) => {
-                        txn.commit()?;
-                        Ok(result)
-                    }
-                    Err(err) => {
-                        txn.rollback()?;
-                        Err(err)
-                    }
-                }
+        let stmt = Parser::new(sql).parse()?;
+        let mut txn = self.engine.begin()?;
+        // 构建执行计划（构建和优化需要访问表结构），执行 SQL 语句
+        match Plan::build(stmt, &mut txn).and_then(|plan| plan.execute(&mut txn)) {
+            Ok(result) => {
+                txn.commit()?;
+                Ok(result)
+            }
+            Err(err) => {
+                txn.rollback()?;
+                Err(err)
             }
         }
     }
