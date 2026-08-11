@@ -334,6 +334,34 @@ fn bench_sql_analytics() -> Result<()> {
         })
     })?;
 
+    // 同样的主键点查跑在 LSM 引擎上（SQL 层 + LSM 的端到端）
+    let dir = tempfile::tempdir()?;
+    let lsm_eng = KVEngine::new(LsmEngine::new(dir.path().to_path_buf())?);
+    let mut ls = lsm_eng.session()?;
+    ls.execute("create table facts (id int primary key, grp int, val float);")?;
+    for batch in 0..(n / 100) {
+        let values = (0..100)
+            .map(|i| {
+                let id = batch * 100 + i;
+                format!("({}, {}, {}.5)", id, id % 16, id % 500)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        ls.execute(&format!("insert into facts values {};", values))?;
+    }
+    report("sql/point select over lsm", lookups, || {
+        let mut rng = Rng::new(9);
+        run(|| {
+            for _ in 0..lookups {
+                let id = rng.next() % n as u64;
+                std::hint::black_box(
+                    ls.execute(&format!("select * from facts where id = {};", id))?,
+                );
+            }
+            Ok(())
+        })
+    })?;
+
     Ok(())
 }
 

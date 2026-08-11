@@ -15,14 +15,20 @@ use super::{
 
 pub type Version = u64;
 
+// 活跃事务集的内存缓存：None 表示尚未从存储加载
+// 每次 begin 都扫描存储的话，在 LSM 引擎上会随着 TxnActive 墓碑累积越来越慢
+type ActiveCache = Arc<Mutex<Option<HashSet<Version>>>>;
+
 pub struct Mvcc<E: Engine> {
     engine: Arc<Mutex<E>>,
+    active: ActiveCache,
 }
 
 impl<E: Engine> Clone for Mvcc<E> {
     fn clone(&self) -> Self {
         Self {
             engine: self.engine.clone(),
+            active: self.active.clone(),
         }
     }
 }
@@ -31,17 +37,21 @@ impl<E: Engine> Mvcc<E> {
     pub fn new(eng: E) -> Self {
         Self {
             engine: Arc::new(Mutex::new(eng)),
+            active: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn begin(&self) -> Result<MvccTransaction<E>> {
-        MvccTransaction::begin(self.engine.clone())
+        MvccTransaction::begin(self.engine.clone(), self.active.clone())
     }
 }
 
 pub struct MvccTransaction<E: Engine> {
     engine: Arc<Mutex<E>>,
+    active: ActiveCache,
     state: TransactionState,
+    // 本事务是否写过数据；只读事务提交时可以跳过 TxnWrite 扫描
+    wrote: std::cell::Cell<bool>,
 }
 
 // 事务状态
@@ -100,7 +110,7 @@ impl MvccKeyPrefix {
 
 impl<E: Engine> MvccTransaction<E> {
     // 开启事务
-    pub fn begin(eng: Arc<Mutex<E>>) -> Result<Self> {
+    pub fn begin(eng: Arc<Mutex<E>>, active: ActiveCache) -> Result<Self> {
         // 获取存储引擎
         let mut engine = eng.lock()?;
         // 获取最新的版本号
@@ -114,18 +124,29 @@ impl<E: Engine> MvccTransaction<E> {
             bincode::serialize(&(next_version + 1))?,
         )?;
 
-        // 获取当前活跃的事务列表
-        let active_versions = Self::scan_active(&mut engine)?;
+        // 获取当前活跃的事务列表：首次从存储加载（含崩溃残留的事务），
+        // 之后由内存缓存增量维护，避免每次 begin 都扫描存储
+        // （在 LSM 引擎上，已删除的 TxnActive 记录是墓碑，扫描会越来越慢）
+        let mut active_guard = active.lock()?;
+        if active_guard.is_none() {
+            *active_guard = Some(Self::scan_active(&mut engine)?);
+        }
+        let active_set = active_guard.as_mut().unwrap();
+        let active_versions = active_set.clone();
 
-        // 当前事务加入到活跃事务列表中
+        // 当前事务加入到活跃事务列表中（持久化 + 缓存同步更新）
         engine.set(MvccKey::TxnAcvtive(next_version).encode()?, vec![])?;
+        active_set.insert(next_version);
+        drop(active_guard);
 
         Ok(Self {
             engine: eng.clone(),
+            active,
             state: TransactionState {
                 version: next_version,
                 active_versions,
             },
+            wrote: std::cell::Cell::new(false),
         })
     }
 
@@ -134,20 +155,28 @@ impl<E: Engine> MvccTransaction<E> {
         // 获取存储引擎
         let mut engine = self.engine.lock()?;
 
-        let mut delete_keys = Vec::new();
-        // 找到这个当前事务的 TxnWrite 信息
-        let mut iter = engine.scan_prefix(MvccKeyPrefix::TxnWrite(self.state.version).encode()?);
-        while let Some((key, _)) = iter.next().transpose()? {
-            delete_keys.push(key);
-        }
-        drop(iter);
+        // 只读事务没有 TxnWrite 记录，跳过扫描
+        if self.wrote.get() {
+            let mut delete_keys = Vec::new();
+            // 找到这个当前事务的 TxnWrite 信息
+            let mut iter =
+                engine.scan_prefix(MvccKeyPrefix::TxnWrite(self.state.version).encode()?);
+            while let Some((key, _)) = iter.next().transpose()? {
+                delete_keys.push(key);
+            }
+            drop(iter);
 
-        for key in delete_keys.into_iter() {
-            engine.delete(key)?;
+            for key in delete_keys.into_iter() {
+                engine.delete(key)?;
+            }
         }
 
-        // 从活跃事务列表中删除
-        engine.delete(MvccKey::TxnAcvtive(self.state.version).encode()?)
+        // 从活跃事务列表中删除（持久化 + 缓存同步更新）
+        engine.delete(MvccKey::TxnAcvtive(self.state.version).encode()?)?;
+        if let Some(set) = self.active.lock()?.as_mut() {
+            set.remove(&self.state.version);
+        }
+        Ok(())
     }
 
     // 回滚事务
@@ -178,8 +207,12 @@ impl<E: Engine> MvccTransaction<E> {
             engine.delete(key)?;
         }
 
-        // 从活跃事务列表中删除
-        engine.delete(MvccKey::TxnAcvtive(self.state.version).encode()?)
+        // 从活跃事务列表中删除（持久化 + 缓存同步更新）
+        engine.delete(MvccKey::TxnAcvtive(self.state.version).encode()?)?;
+        if let Some(set) = self.active.lock()?.as_mut() {
+            set.remove(&self.state.version);
+        }
+        Ok(())
     }
 
     pub fn set(&self, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
@@ -323,6 +356,7 @@ impl<E: Engine> MvccTransaction<E> {
             MvccKey::Version(key.clone(), self.state.version).encode()?,
             bincode::serialize(&value)?,
         )?;
+        self.wrote.set(true);
         Ok(())
     }
 
