@@ -164,6 +164,18 @@ mod tests {
     }
 
     #[test]
+    fn test_lsm() -> Result<()> {
+        use crate::storage::lsm::LsmEngine;
+        let d1 = tempfile::tempdir()?;
+        test_point_opt(LsmEngine::new(d1.path().to_path_buf())?)?;
+        let d2 = tempfile::tempdir()?;
+        test_scan(LsmEngine::new(d2.path().to_path_buf())?)?;
+        let d3 = tempfile::tempdir()?;
+        test_scan_prefix(LsmEngine::new(d3.path().to_path_buf())?)?;
+        Ok(())
+    }
+
+    #[test]
     fn test_disk() -> Result<()> {
         test_point_opt(DiskEngine::new(PathBuf::from("/tmp/sqldb1/db.log"))?)?;
         std::fs::remove_dir_all(PathBuf::from("/tmp/sqldb1"))?;

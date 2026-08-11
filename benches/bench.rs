@@ -13,7 +13,9 @@ use sharkdb::{
     error::Result,
     sql::engine::kv::KVEngine,
     sql::engine::Engine as SqlEngine,
-    storage::{disk::DiskEngine, engine::Engine, memory::MemoryEngine, mvcc::Mvcc},
+    storage::{
+        disk::DiskEngine, engine::Engine, lsm::LsmEngine, memory::MemoryEngine, mvcc::Mvcc,
+    },
 };
 
 const KEY_SIZE: usize = 16;
@@ -31,6 +33,7 @@ fn main() -> Result<()> {
 
     bench_storage_memory()?;
     bench_storage_disk()?;
+    bench_storage_lsm()?;
     bench_mvcc()?;
     bench_sql()?;
 
@@ -118,6 +121,62 @@ fn bench_storage_disk() -> Result<()> {
     report("disk/recover (100k entries)", 1, || {
         run(|| {
             let eng = DiskEngine::new(dir.path().join("db.log"))?;
+            std::hint::black_box(&eng);
+            Ok(())
+        })
+    })?;
+
+    Ok(())
+}
+
+fn bench_storage_lsm() -> Result<()> {
+    let n = 100_000;
+
+    report("lsm/set (wal+memtable)", n, || {
+        let dir = tempfile::tempdir()?;
+        let mut eng = LsmEngine::new(dir.path().to_path_buf())?;
+        let mut rng = Rng::new(42);
+        run(|| {
+            for _ in 0..n {
+                eng.set(rng.key(), rng.value())?;
+            }
+            Ok(())
+        })
+    })?;
+
+    let dir = tempfile::tempdir()?;
+    let mut eng = LsmEngine::new(dir.path().to_path_buf())?;
+    fill(&mut eng, n)?;
+    report("lsm/get (point read)", n, || {
+        let mut rng = Rng::new(42);
+        run(|| {
+            for _ in 0..n {
+                let (k, _) = (rng.key(), rng.value());
+                std::hint::black_box(eng.get(k)?);
+            }
+            Ok(())
+        })
+    })?;
+
+    let scans = 10_000;
+    report("lsm/scan_prefix", scans, || {
+        let mut rng = Rng::new(7);
+        run(|| {
+            for _ in 0..scans {
+                let mut prefix = rng.key();
+                prefix.truncate(2);
+                let iter = eng.scan_prefix(prefix);
+                std::hint::black_box(iter.count());
+            }
+            Ok(())
+        })
+    })?;
+
+    // 重启恢复：打开 SSTable 索引 + 重放 WAL
+    drop(eng);
+    report("lsm/recover (100k entries)", 1, || {
+        run(|| {
+            let eng = LsmEngine::new(dir.path().to_path_buf())?;
             std::hint::black_box(&eng);
             Ok(())
         })
