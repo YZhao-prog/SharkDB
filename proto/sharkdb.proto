@@ -1,0 +1,126 @@
+syntax = "proto3";
+
+package sharkdb.v1;
+
+// SQL service exposed over gRPC.
+//
+// Sessions are server-side handles with an explicit lifecycle. Every Execute
+// call runs inside its own auto-commit transaction; the session identifies the
+// caller and bounds the lifetime of its server-side state.
+service Sql {
+  // Open a session and receive its identifier.
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+
+  // Release a session and its server-side state. Idempotent.
+  rpc CloseSession(CloseSessionRequest) returns (CloseSessionResponse);
+
+  // Run one statement and return the whole result.
+  rpc Execute(ExecuteRequest) returns (ExecuteResponse);
+
+  // Run one statement and stream the result. Column metadata arrives first,
+  // then rows in batches, so a large scan is not delivered in one message.
+  rpc ExecuteStream(ExecuteStreamRequest) returns (stream ExecuteStreamResponse);
+
+  // Liveness probe. Also reports how many sessions are currently open.
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message CreateSessionRequest {}
+
+message CreateSessionResponse {
+  string session_id = 1;
+}
+
+message CloseSessionRequest {
+  string session_id = 1;
+}
+
+message CloseSessionResponse {
+  // False when the session was already gone.
+  bool existed = 1;
+}
+
+message ExecuteRequest {
+  string session_id = 1;
+  string sql = 2;
+}
+
+message ExecuteStreamRequest {
+  string session_id = 1;
+  string sql = 2;
+  // Rows per batch. Zero selects the server default.
+  uint32 batch_size = 3;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string version = 1;
+  uint64 open_sessions = 2;
+}
+
+// An explicit message so a SQL NULL is representable in the oneof without
+// pulling in the well-known types.
+message Null {}
+
+message Value {
+  oneof kind {
+    Null null = 1;
+    bool boolean = 2;
+    int64 integer = 3;
+    double double_value = 4;
+    string string_value = 5;
+  }
+}
+
+message Row {
+  repeated Value values = 1;
+}
+
+message CreateTableResult {
+  string table_name = 1;
+}
+
+message MutationResult {
+  uint64 count = 1;
+}
+
+message ScanResult {
+  repeated string columns = 1;
+  repeated Row rows = 2;
+}
+
+message ExplainResult {
+  string plan = 1;
+}
+
+// Mirrors the engine's ResultSet.
+message ExecuteResponse {
+  oneof result {
+    CreateTableResult create_table = 1;
+    MutationResult insert = 2;
+    MutationResult update = 3;
+    MutationResult delete = 4;
+    ScanResult scan = 5;
+    ExplainResult explain = 6;
+  }
+}
+
+message ScanMetadata {
+  repeated string columns = 1;
+}
+
+message RowBatch {
+  repeated Row rows = 1;
+}
+
+message ExecuteStreamResponse {
+  oneof payload {
+    // Sent once, before any batch, for statements that produce rows.
+    ScanMetadata metadata = 1;
+    // Zero or more batches of rows.
+    RowBatch batch = 2;
+    // Sent instead of metadata/batches for statements that produce a count.
+    ExecuteResponse summary = 3;
+  }
+}

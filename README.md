@@ -67,6 +67,14 @@ HashJoin: t.id = d.owner
 - Parallel two-phase aggregation: per-chunk partial aggregation with mergeable accumulators, classic partial-agg design
 - Parallel scan decoding of stored rows
 
+**gRPC server** (optional, behind the `grpc` feature)
+
+- `Execute` returns a whole result; `ExecuteStream` sends column metadata first and then rows in batches, so a large scan is not carried in one message
+- Sessions are server-side handles with an explicit lifecycle; an unknown or closed session is rejected rather than silently re-created
+- Statements run on the blocking thread pool, so a long scan never stalls the async reactor
+- Engine errors map onto status codes by fault: a parse error is `InvalidArgument`, a write conflict is `Aborted`, anything else is `Internal`
+- Codegen uses a vendored `protoc`, so building needs no protobuf compiler on the machine
+
 **Transactions (MVCC)**
 
 - Snapshot isolation: each transaction sees a consistent snapshot defined by its version and the set of transactions active at begin
@@ -118,9 +126,21 @@ Benchmarking SQL point lookups over the LSM engine initially showed **163 QPS** 
 ## Getting started
 
 ```bash
-cargo test     # 58 tests: engine conformance, MVCC isolation, SQL end-to-end, optimizer plans
-cargo bench    # zero-dependency benchmark suite
+cargo test                      # 58 tests: engine conformance, MVCC isolation, SQL end-to-end, optimizer plans
+cargo test --features grpc      # + 13 gRPC integration tests over a real TCP socket
+cargo bench                     # zero-dependency benchmark suite
 ```
+
+Run it as a server:
+
+```bash
+cargo run --features grpc --bin sharkdb-server -- --engine lsm --data ./data
+cargo run --features grpc --example grpc_client        # in another shell
+```
+
+The core engine depends on five crates. `tonic`, `prost` and `tokio` arrive only
+with `--features grpc`, so a library user who does not want a network stack does
+not compile one.
 
 Use as a library:
 
@@ -152,7 +172,7 @@ Known limitations (deliberately scoped): no `HAVING`, no outer joins, no subquer
 ## Roadmap
 
 - Secondary indexes and index selection in the optimizer
-- Network server (per-connection sessions) and a CLI REPL
+- A CLI REPL over the gRPC endpoint
 - MVCC old-version GC below the oldest active snapshot watermark
 - Tombstone-ratio-triggered compaction
 - Outer joins, `HAVING`, subqueries
